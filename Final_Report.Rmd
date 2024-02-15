@@ -1,0 +1,1554 @@
+---
+title: "Final Project: Final Report"
+date: today
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: flatly
+---
+
+# Overview
+
+    *Project title: Anime Recommendation System
+    *Repository: {replace this with your git repository link}
+    *Team member(s): Chen, Wan Qi (wac45@pitt.edu), Clarchick, Victoria (vlc24@pitt.edu), Gupta, Abhibha (abg96@pitt.edu)
+
+Abstract
+This is a reflection on the creation of a recommendation system using R. The recommendation system was for the purpose of being able to suggest an anime to different users. The dataset was first explored through a various plots (Eg: cor plot) and the most important features were taken into consideration for the recommendation system. The different variables were evaluated as well to determine the influence between the variables. Each variable was run through an extraction and frequency function and then analyzed. After the data exploration the dataset was run through the recommendation system. We used the ‘hybrid’ approach that weighs different methods based on popularity, randomness and recommendation. The results for our method are provided in the subsequent sections.
+
+```{r document_setup, echo=F, message=F, warning=F}
+# This chunk can include things you need for the rest of the document
+library('ggplot2') ## most of the time you will need ggplot
+theme_set(theme_bw()) # change the default ggplot theme to black-and-white
+
+knitr::opts_chunk$set(
+  echo=T, ## show your R code chunk
+  message = F, ## hide the message
+  warning = F, ## hide the warning
+  autodep = T ## make sure your separate code chunks can find the dependencies (from other code chunk)
+)
+```
+
+# Import and Install libraries
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(GGally)
+library(caret)
+library(forcats)
+library(recommenderlab)
+library(data.table)
+library(reshape2)
+library(maditr)
+# library(ggstatsplot) #for correlation in task 5
+
+```
+
+```{r}
+csv_Rating <- read.csv(file = "/Users/abhibhagupta/Desktop/rating_complete.csv")
+csv_Anime <- read.csv(file = "/Users/abhibhagupta/Desktop/anime.csv")
+csv_Genre <- read.csv(file = "/Users/abhibhagupta/Desktop/anime_genre_year3.csv")
+df_anime <- csv_Anime
+df_rating <- csv_Rating
+anime_data <- csv_Anime
+rating_data <- csv_Rating
+df_genre <- csv_Genre
+
+```
+
+#Data Exploration
+
+```{r}
+##This is for preprocessing the data
+#Read data
+##df_anime <- read.csv(file = "C:/Users/set4s/Documents/Data Mining/Data Files/anime.csv")
+#df_anime
+##df_rating <- read.csv(file = "C:/Users/set4s/Documents/Data Mining/Data Files/rating_complete.csv")
+
+```
+
+```{r}
+#removing unknowns
+###summary(df_rating)
+#removing unknowns
+df_anime$Ranked<-as.integer(df_anime$Ranked)
+df_anime$Score<-as.integer(df_anime$Score)
+df_anime$MAL_ID<-as.integer(df_anime$MAL_ID)
+df_anime_clean <- as.data.frame(df_anime) %>% na.omit(df_anime)
+colnames(df_anime_clean)[1] ="anime_id"
+df_rating_clean <- as.data.frame(df_rating)%>% na.omit(df_rating)
+
+```
+
+```{r}
+df_combine<- left_join(df_rating_clean, df_anime_clean, by="anime_id")
+df_com_clean<- df_combine%>%select('user_id':'Plan.to.Watch')
+df_com_clean<- as.data.frame(df_com_clean)%>% na.omit(df_com_clean)
+colnames(df_com_clean)[3] ="user_rating"
+```
+
+```{r}
+df_com_clean_1000<-df_com_clean[df_com_clean$Ranked<1000,]
+df_com_clean_1000<-as.data.frame(df_com_clean_1000)
+```
+
+```{r}
+df_com_clean_20<-df_com_clean[df_com_clean$Ranked<20,]
+df_com_clean_20<-as.data.frame(df_com_clean_20)
+```
+
+```{r}
+df_com_clean_100<-df_com_clean[df_com_clean$Ranked<100,]
+df_com_clean_100<-as.data.frame(df_com_clean_100)
+```
+
+```{r cor-plot}
+lowerFn <- function(data, mapping, method = "lm") {
+  ggplot(data = data, mapping = mapping) +
+    geom_point(colour = "slategray4", size = 2, shape = 18) +
+    geom_smooth(method = method, color = "coral3") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(size = 8, angle = 45))
+}
+df_anime_clean %>% arrange(df_anime_clean$Ranked) %>% slice(1:1000) %>%
+  select( Popularity, Favorites, Score, Ranked, Watching, Members) %>%mutate_all(as.numeric) %>%
+  ggpairs(lower = list(continuous = wrap(lowerFn, method = "lm")),
+    diag = list(continuous = wrap("barDiag", fill = 'skyblue1', colour = "skyblue4")),
+    upper = list(continuous = wrap("cor", size = 5)),cardinality_threshold=50,
+    progress = FALSE)
+```
+
+Proportionate:
+Popularity/Rank
+Watching/Members
+Score: Favorite, Members
+Disproportionate:
+Rank: Favorites, Score,Members
+Popularity: Members, Score
+Important Var:
+Score and Rank
+
+```{r Genres-extraction}
+###View Genres
+#df_com_clean_1000%>% group_by(Genres) %>% 
+#  summarize(count = n())
+
+###Types of Genres
+genres <- c("Action", "Adventure", "Cars", "Comedy", "Dementia", "Demons", "Drama", "Ecchi", "Fantasy", "Game", "Harem", "Historical", "Horror", "Josei", "Kids", "Magic", "Martial Arts", "Mecha", "Military", "Music", "Mystery", "Parody", "Police", "Psychological", "Romance", "Samurai", "School", "Sci-Fi", "Seinen", "Shoujo", "Shounen", "Slice of Life", "Space", "Sports", "Super Power", "Supernatural", "Thriller", "Vampire")
+
+###Function to split Data
+genres_df <- data.frame(
+  Genres = genres,
+  Count = sapply(genres, function(x) {
+    sum(str_detect(df_com_clean_1000$Genres, x))
+  })
+)
+```
+
+```{r genre-popularity}
+##Arrange data
+genres_df_10<-genres_df%>% arrange(desc(Count)) %>%slice(1:10)
+genres_df_5<-genres_df%>% arrange(desc(Count)) %>%slice(1:5)
+###Plot the Genres
+genres_df %>%
+  ggplot(aes(x = Count, y = Genres)) +
+  ggtitle("Count of Animes within Genres") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Count of Animes") +
+  ylab("Genres") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))
+
+genres_df_10 %>%
+  ggplot(aes(x = Count, y = fct_reorder(Genres, Count))) +
+  ggtitle("Top 10 Count of Animes within Genres") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Count of Animes") +
+  ylab("Genres") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Genre-Avg_extraction}
+genres_df_2 <- data.frame(
+  Genres = genres,
+  Rating = sapply(genres, function(x) {
+    mean(df_com_clean_1000[str_detect(df_com_clean_1000$Genres, x),]$user_rating)
+  })
+)
+```
+
+```{r Genre-Avg-Rating}
+genres_df_2_5<-genres_df_2%>% arrange(desc(Rating)) %>%slice(1:10)
+genres_df_2 %>%
+  ggplot(aes(x = Rating, y = Genres)) +
+  ggtitle("Average Ratings for Genre") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Genres") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))
+
+genres_df_2_5 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Genres,Rating))) +
+  ggtitle("Top 10 Average Ratings for Genre") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Genres") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+How many users watched this Genre
+Average rating for Genre
+1 Genre that overlaps within top 10
+Shows that most watched Genres are not highly rated
+
+```{r rating-distribution}
+# Rating count
+#df_com_clean_1000 %>%
+#  group_by(user_rating) %>%
+#  summarize(count = n())
+
+df_com_clean %>%
+  group_by(user_rating) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = user_rating, y = count)) +
+  geom_bar(stat = "identity", fill = "#8888ff") +
+  ggtitle("Rating Distribution") +
+  xlab("Rating") +
+  ylab("Occurrences Count") +
+  scale_x_continuous(n.breaks = 10) +
+  theme(axis.title.x = element_text(vjust = -5, face = "bold"), 
+        axis.title.y = element_text(vjust = 10, face = "bold"), 
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm")) +
+  geom_text(aes(label = count, vjust = -0.2))
+
+df_com_clean_1000 %>%
+  group_by(user_rating) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = user_rating, y = count)) +
+  geom_bar(stat = "identity", fill = "#8888ff") +
+  ggtitle("Rating Distribution") +
+  xlab("Rating") +
+  ylab("Occurrences Count") +
+  scale_x_continuous(n.breaks = 10) +
+  theme(axis.title.x = element_text(vjust = -5, face = "bold"), 
+        axis.title.y = element_text(vjust = 10, face = "bold"), 
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = count, vjust = -0.2))
+```
+
+Out of the top 1000 ranked anime most have been rated by aprox 25000 users so the average rating is well distributed
+
+```{r anime-rating}
+#df_com_clean_1000 %>%
+#  group_by(anime_id) %>% 
+#  summarize(count = n()) %>%
+#  slice_head(n = 10)
+
+
+df_com_clean_1000 %>%
+  group_by(anime_id) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = anime_id, y = count)) +
+  geom_point(alpha = 0.2, color = "#4020dd") +
+  geom_smooth(color = "red") +
+  ggtitle("Number of Ratings per anime") +
+  xlab("anime id") +
+  ylab("Number of ratings") +
+  scale_x_continuous(n.breaks = 10) +
+  theme(axis.title.x = element_text(vjust = -5, face = "bold"), 
+        axis.title.y = element_text(vjust = 10, face = "bold"), 
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))
+```
+
+```{r anime-rating-histogram}
+df_com_clean_1000 %>%
+  group_by(anime_id) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = count)) +
+  geom_histogram(fill = "#8888ff", color = "#4020dd") +
+  ggtitle("anime' rating histogram") +
+  xlab("Number of ratings") +
+  ylab("anime id") +
+  scale_x_log10(n.breaks = 10) +
+  theme(axis.title.x = element_text(vjust = -5, face = "bold"), 
+        axis.title.y = element_text(vjust = 10, face = "bold"), 
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))
+```
+
+```{r users-per-rating-histogram}
+df_com_clean_1000 %>%
+  group_by(user_id) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = count)) +
+  geom_histogram(fill = "#8888ff", color = "#4020dd") +
+  ggtitle("Users' rating histogram") +
+  xlab("Rating count") +
+  ylab("Number of Users that Rated") +
+  scale_x_log10(n.breaks = 10) +
+  theme(axis.title.x = element_text(vjust = -5, face = "bold"), 
+        axis.title.y = element_text(vjust = 10, face = "bold"), 
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))
+```
+
+```{r user-anime-heatmap}
+limit <- 50
+user_anime_matrix <- df_com_clean_100 %>% 
+  filter(user_id %in% sample(unique(df_com_clean_100$user_id), limit)) %>%
+  select(user_id, anime_id, user_rating) %>%
+  mutate(rating = 1) %>%
+  spread(anime_id, user_rating) %>% 
+  select(sample(ncol(.), limit)) %>% 
+  as.matrix() %>% 
+  t(.) 
+
+user_anime_matrix %>% 
+  image(1:limit, 1:limit,., xlab = "Anime", ylab = "User") +
+  abline(h = 0:limit + 0.5, v = 0:limit + 0.5, col = "grey") +
+  title(main = list("User x Anime matrix w/ Rating", cex = 1, font = 2))
+```
+
+```{r Studio-extraction}
+top_studios <- df_com_clean_1000 %>% 
+  group_by(Studios) %>%
+  summarise(Count = n()) %>% 
+  top_n(20, wt = Count)
+
+top_studios<-top_studios%>%arrange(Count)
+#print(top_studios)
+###Types of Genres
+studios <- c("Manglobe", "CoMix Wave Films", "P.A. Works", "Toei Animation", "TMS Entertainment", "Brain's Base", "Studio Deen", "White Fox", "Wit Studio", "ufotable", "Studio Pierrot", "Studio Ghibli", "Shaft", "Sunrise", "Production I.G", "J.C.Staff", "A-1 Pictures", "Kyoto Animation", "Bones", "Madhouse")
+
+###Function to split Data
+studios_df <- data.frame(
+  Studios = studios,
+  Count = sapply(studios, function(x) {
+    sum(str_detect(df_com_clean_1000$Studios, x))
+  })
+)
+
+```
+
+```{r Studio-popularity}
+###Plot the Studios
+studios_df_10<-studios_df %>% arrange(desc(Count)) %>%slice(1:10)
+studios_df_10 %>%
+  ggplot(aes(x = Count, y = fct_reorder(Studios,Count))) +
+  ggtitle("Top 10 Studios Based on the Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Studios") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Studio-Avg-extraction}
+studios_df_2 <- data.frame(
+  Studios = studios,
+  Rating = sapply(studios, function(x) {
+    mean(df_com_clean_1000[str_detect(df_com_clean_1000$Studios, x),]$user_rating)
+  })
+)
+
+```
+
+```{r Studio-avg-rating}
+#print(studios_df_2)
+studios_df_2_10<-studios_df_2 %>% arrange(desc(Rating)) %>%slice(1:10)
+studios_df_2_5<-studios_df_2 %>% arrange(desc(Rating)) %>%slice(1:5)
+studios_df_2_10 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Studios,Rating))) +
+  ggtitle("Top 10 Studios by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Studios") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+4 Studios that overlap
+The higher rated studios are watched less
+Showing that studios that mass produce do not have high quality ratings
+
+```{r Producer-extraction}
+top_Producers <- df_com_clean_100 %>% 
+  group_by(Producers) %>%
+  summarise(Count = n()) 
+
+top_Producers<-top_Producers%>%arrange(Producers)
+```
+
+```{r Producer-config}
+###Types of Producers
+producers <- c("A-1 Pictures", "ABC Animation", "Amuse", "Animation Do", "Animax", "Aniplex", "Asatsu DK", "Ashi Production", "Asmik Ace", "AT-X", "Audio Highs", "Avex Pictures", "Bandai", "Bandai Namco Entertainment", "Bandai Visual", "Banpresto", "BS Fuji", "BS11", "CA-Cygames Anime Fund", "Crunchyroll SC Anime Fund", "Cyclone Graphics", "Cygames", "DAX Production", "Delfi Sound", "Dentsu", "Docomo Anime Store", "dugout", "FBC", "Fuji TV", "Fujipacific Music", "Global Solutions", "Good Smile Company", "Hakuhodo DY Media Partners", "Hakuhodo DY Music & Pictures", "Hakusensha", "Half H.P Studio", "Hiroshima Television", "JR East Marketing & Communications", "Kadokawa", "Kadokawa Media House", "Kadokawa Pictures Japan", "Kadokawa Shoten", "Kanetsu Investment", "Kansai Telecasting", "K-Factory", "King Records", "KlockWorx", "Kodansha", "Konami", "Kyoraku Industrial Holdings", "Lantis", "Mag Garden", "Mainichi Broadcasting System", "Marvelous", "Media Factory", "Medicos Entertainment", "Miracle Bus", "Miracle Robo", "Mirai-Kojo", "Movic", "My Theater D.D.", "Nagoya Broadcasting Network", "NewGin", "NHK", "Nihon Ad Systems", "Nippon Television Music", "Nippon Television Network", "Nitroplus", "Notes", "Pony Canyon", "Pony Canyon Enterprise", "Quaras", "Rakuonsha", "Sakura Create", "Science SARU", "Seikaisha", "Shochiku", "Shogakukan", "Shogakukan-Shueisha Productions", "Shueisha", "SKY Perfect Well Think", "Sony Music Communications", "Sony Music Entertainment", "Sound Team Don Juan", "Square Enix", "Studio Hibari", "Studio Jack", "Studio Moriken", "Takeshobo", "TAP", "TBS", "TC Entertainment", "Techno Sound", "Toho", "TOHO animation", "Tohokushinsha Film Corporation", "Tokuma Shoten", "Tokyo MX", "Toy's Factory", "Trinity Sound", "Twin Engine", "VAP", "Victor Entertainment", "voque ting", "Warner Bros. Japan", "Yomiuri Telecasting", "YTV", "Annapuru", "Avex Entertainment", "d-rights", "Frontier Works", "Kitty Films", "Madhouse", "Production I.G", "Starchild Records", "TMS Music", "TV Asahi", "TV Tokyo", "Unknown")
+  
+producers_df <- data.frame(
+  Producers = producers,
+  Count = sapply(producers, function(x) {
+    sum(str_detect(df_com_clean_100$Producers, x))
+  })
+)
+
+
+```
+
+```{r Producer-popularity}
+###Plot the Producers
+producers_df_10<-producers_df %>% arrange(desc(Count)) %>%slice(1:20)
+producers_df_10 %>%
+  ggplot(aes(x = Count, y = fct_reorder(Producers,Count))) +
+  ggtitle("Top 20 Producers Based on the Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Producers") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Producer-Avg-extraction}
+producers_df_2 <- data.frame(
+  Producers = producers,
+  Rating = sapply(producers, function(x) {
+    mean(df_com_clean_100[str_detect(df_com_clean_100$Producers, x),]$user_rating)
+  })
+)
+
+```
+
+```{r Producer-avg-rating}
+producers_df_2_10<-producers_df_2 %>% arrange(desc(Rating)) %>%slice(1:20)
+producers_df_2_5<-producers_df_2 %>% arrange(desc(Rating)) %>%slice(1:5)
+producers_df_2_10 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Producers,Rating))) +
+  ggtitle("Top 20 Producers by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Producers") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+This category had to be expanded out to top 20 to find 1 common Producer
+Indicates like studios that there are many producers but within the most watched and highly ranked there are almost no commonalities
+
+```{r Licensors-extraction}
+top_Licensors <- df_com_clean_100 %>% 
+  group_by(Licensors) %>%
+  summarise(Count = n()) 
+
+top_Licensors<-top_Licensors%>%arrange(Licensors)
+```
+
+```{r Licensors-config}
+###Types of Licensors
+Licensors <- c("4Kids Entertainment", "Aniplex of America", "Bandai Entertainment", "Central Park Media", "Crunchyroll", "Geneon Entertainment USA", "GKIDS", "Inc.", "Manga Entertainment", "NYAV Post", "Sentai Filmworks", "Tokyopop", "ADV Films", "Discotek Media", "Eleven Arts", "Flatiron Film Company", "Funimation", "NIS America", "Nozomi Entertainment", "Unknown", "VIZ Media", "Walt Disney Studios")
+  
+Licensors_df <- data.frame(
+  Licensors = Licensors,
+  Count = sapply(Licensors, function(x) {
+    sum(str_detect(df_com_clean_1000$Licensors, x))
+  })
+)
+
+
+```
+
+```{r Licensors-popularity}
+###Plot the Licensors
+Licensors_df_10<-Licensors_df %>% arrange(desc(Count)) %>%slice(1:10)
+Licensors_df_5<-Licensors_df %>% arrange(desc(Count)) %>%slice(1:5)
+Licensors_df_10 %>%
+  ggplot(aes(x = Count, y = fct_reorder(Licensors,Count))) +
+  ggtitle("Top 10 Licensors Based on the Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Licensors") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Licensors-Avg-extraction}
+Licensors_df_2 <- data.frame(
+  Licensors = Licensors,
+  Rating = sapply(Licensors, function(x) {
+    mean(df_com_clean_1000[str_detect(df_com_clean_1000$Licensors, x),]$user_rating)
+  })
+)
+
+```
+
+```{r Licensors-avg-rating}
+
+Licensors_df_2_10<-Licensors_df_2 %>% arrange(desc(Rating)) %>%slice(1:10)
+Licensors_df_2_5<-Licensors_df_2 %>% arrange(desc(Rating)) %>%slice(1:5)
+Licensors_df_2_10 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Licensors,Rating))) +
+  ggtitle("Top 10 Licensors by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Licensors") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+Similar to Studios and Producer 
+Mass Licensing is equivilant to less desired ratings.
+
+```{r Source-extraction}
+Source_df <- df_com_clean_1000 %>% 
+  group_by(Source) %>%
+  summarise(Count = n()) 
+Source_df<- as.data.frame(Source_df)
+```
+
+```{r Source-popularity}
+###Plot the Source
+Source_df_10<-Source_df %>% arrange(desc(Count)) %>%slice(1:10)
+Source_df_10 %>%
+  ggplot(aes(x = Count , y = fct_reorder(Source,Count))) +
+  ggtitle("Top 10 Sources VS Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Source") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Source-Avg-extraction}
+Source_df_2 <- df_com_clean_1000 %>% 
+  group_by(Source) %>%
+  summarise_at(vars(user_rating),list(Rating=mean))
+```
+
+```{r Source-avg-rating}
+
+Source_df_2_10<-Source_df_2 %>% arrange(desc(Rating)) %>%slice(1:10)
+Source_df_2_10  %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Source,Rating))) +
+  ggtitle("Top 10 Sources by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Source") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+```{r Source2-extraction}
+Source_df2 <- df_com_clean %>% 
+  group_by(Source) %>%
+  summarise(Count = n()) 
+Source_df2<- as.data.frame(Source_df2)
+```
+
+```{r Source2-popularity}
+###Plot the Source
+Source_df2_10<-Source_df2 %>% arrange(desc(Count)) %>%slice(1:10)
+Source_df2_10 %>%
+  ggplot(aes(x = Count , y = fct_reorder(Source,Count))) +
+  ggtitle("Top 10 Sources VS Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Source") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Source2-Avg-extraction}
+Source_df2_2 <- df_com_clean %>% 
+  group_by(Source) %>%
+  summarise_at(vars(user_rating),list(Rating=mean))
+Source_df2_2<- as.data.frame(Source_df2_2)
+```
+
+```{r Source2-avg-rating}
+
+Source_df2_2_10<-Source_df2_2 %>% arrange(desc(Rating)) %>%slice(1:10)
+Source_df2_2_10  %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Source,Rating))) +
+  ggtitle("Top 10 Sources by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Source") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+Ranked 1-1000
+3 common Sources
+Entire DataSet
+6 common Sources
+Sources that are most watched are not within the highest ratings yet the lower Sources watched are much higher rated
+
+Shows that sources that are watched most often do not have high ratings
+
+```{r Type-extraction}
+Type_df <- df_com_clean_1000 %>% 
+  group_by(Type) %>%
+  summarise(Count = n()) 
+Type_df<- as.data.frame(Type_df)
+```
+
+```{r Type-popularity}
+###Plot the Type
+Type_df %>%
+  ggplot(aes(x = Count , y = fct_reorder(Type,Count))) +
+  ggtitle("Type VS Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Type") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Type-Avg-extraction}
+Type_df_2 <- df_com_clean_1000 %>% 
+  group_by(Type) %>%
+  summarise_at(vars(user_rating),list(Rating=mean))
+```
+
+```{r Type-avg-rating}
+Type_df_2 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Type,Rating))) +
+  ggtitle("Type by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Type") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+```{r Type2-extraction}
+Type_df2 <- df_com_clean %>% 
+  group_by(Type) %>%
+  summarise(Count = n()) 
+Type_df2<- as.data.frame(Type_df2)
+```
+
+```{r Type2-popularity}
+###Plot the Type
+Type_df2 %>%
+  ggplot(aes(x = Count , y = fct_reorder(Type,Count))) +
+  ggtitle("Type VS Number of Users that Rated") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Number of ratings") +
+  ylab("Type") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Count), vjust = -0.2)
+
+```
+
+```{r Type2-Avg-extraction}
+Type_df2_2 <- df_com_clean %>% 
+  group_by(Type) %>%
+  summarise_at(vars(user_rating),list(Rating=mean))
+```
+
+```{r Type2-avg-rating}
+Type_df2_2 %>%
+  ggplot(aes(x = Rating, y = fct_reorder(Type,Rating))) +
+  ggtitle("Type by Average Rating") +
+  geom_bar(stat = "identity", width = 0.6, fill = "#8888ff") +
+  xlab("Average ratings") +
+  ylab("Type") +
+  theme(plot.title = element_text(vjust = 3.5),
+        axis.title.x = element_text(vjust = -5, face = "bold"),
+        axis.title.y = element_text(vjust = 10, face = "bold"),
+        axis.text.x = element_text(vjust = 1, hjust = 1, angle = 0),
+        axis.text.y = element_text(vjust = 0.25, hjust = 1, size = 12),
+        plot.margin = margin(0.7, 0.5, 1, 1.2, "cm"))+
+  geom_text(aes(label = Rating), vjust = -0.2)
+```
+
+Ranked 1-1000
+top 2 are the for both most rated and highest ratings 
+Entire DataSet
+top 2 are the only changes 
+users will watch TV much more than Movies but the rating is almost the same
+
+##Visualization
+The distribution of the all anime
+```{r}
+df_anime_remove <- subset(csv_Anime, !grepl("Unknown", Genres))
+#df_anime_remove
+```
+```{r}
+# check score/popularity types
+df_anime_remove$Score <- as.numeric(df_anime_remove$Score)
+df_anime_remove$Ranked <- as.numeric(df_anime_remove$Ranked)
+typeof(df_anime_remove$Ranked)
+```
+
+
+```{r}
+#Relationships between score and popularity
+#linear regression
+lm_score_prop <-
+  lm(df_anime_remove$Score ~ df_anime_remove$Popularity)
+```
+
+```{r}
+#Visualization
+ggplot(df_anime_remove, aes(df_anime_remove$Popularity, df_anime_remove$Score)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+
+ggplot(df_anime_remove, aes(df_anime_remove$Ranked, df_anime_remove$Score)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+
+# ggscatterstats(data = df_anime_remove, x = df_anime_remove$Popularity, y = df_anime_remove$Score)
+
+```
+
+
+
+```{r}
+df_anime_remove %>% 
+  ggplot(aes(x = Score)) + 
+  geom_histogram(fill="blue", binwidth = 0.1) +
+  scale_x_continuous(breaks = seq(0, 10, by = 1)) + 
+  labs(x = "score", y = "number of anime")
+```
+
+Treemaps
+1. Genre counts
+
+
+```{r}
+genre <- c()
+for (i in df_anime_remove['Genres'])
+{
+  for (j in (strsplit(i, ",")))
+  {
+    j <- gsub("[\" ]", "", j)
+    #print(j)
+    #break
+    genre <- append(genre, j)
+    
+  }
+}
+```
+
+```{r}
+counts <- as.data.frame(table(genre))
+head(counts)
+```
+
+```{r}
+#install.packages('treemapify')
+library(treemap)
+head(counts)
+treemap(counts, index = c("genre", "Freq"), vSize = "Freq", vColor = "Freq", type = "value")
+```
+
+Preparing data
+#finding the type for each anime.
+```{r}
+type <- c()
+
+for (i in df_anime_remove['Type'])
+{
+  for (j in (strsplit(i, ",")))
+  {
+    j <- gsub("[\" ]", "", j)
+    #print(j)
+    #break
+    type <- append(type, j)
+    
+  }
+}
+```
+
+#finding counts for each type
+```{r}
+type_counts <- as.data.frame(table(type))
+(type_counts)
+```
+
+#finding the source for each anime.
+```{r}
+source <- c()
+
+for (i in df_anime_remove['Source'])
+{
+  for (j in (strsplit(i, ",")))
+  {
+    j <- gsub("[\" ]", "", j)
+    #print(j)
+    #break
+    source <- append(source, j)
+    
+  }
+}
+```
+
+#finding counts for each source
+```{r}
+source_counts <- as.data.frame(table(source))
+head(source_counts)
+```
+
+
+2. Type counts
+```{r}
+treemap(type_counts, index = c("type", "Freq"), vSize = "Freq", vColor = "Freq", type = "value")
+```
+
+3. Source counts
+```{r}
+treemap(source_counts, index = c("source", "Freq"), vSize = "Freq", vColor = "Freq", type = "value")
+```
+
+Studios with the Top 20 most animes
+#finding the unique source for each anime.
+```{r}
+studios <- c()
+
+for (i in df_anime_remove['Studios'])
+{
+  for (j in (strsplit(i, ",")))
+  {
+    j <- gsub("[\" ]", "", j)
+    #print(j)
+    #break
+    studios <- append(studios, j)
+    
+  }
+}
+```
+
+#finding the counts for each studios
+```{r}
+studios_counts <- as.data.frame(table(studios))
+head(studios_counts)
+```
+<!-- removing unknowns -->
+```{r}
+studios_counts_remove <- subset(studios_counts, !grepl("Unknown", studios))
+```
+
+```{r}
+studios_counts_remove %>% 
+  top_n(20, wt=Freq) %>%
+        ggplot(aes(x=reorder(studios, Freq), y=Freq)) +
+        geom_bar(stat='identity', fill="skyblue") + coord_flip(y=c(0, 300)) +
+        labs(x="", y="Number of animes") + 
+        geom_text(aes(label=Freq), hjust=-0.1, size=3)
+```
+
+genre vs year!!!
+
+```{r}
+#install.packages("ggridges")
+```
+
+```{r}
+library(ggridges)
+```
+
+```{r}
+df_genre %>% 
+  ggplot(aes(x = year, y = genre)) + 
+  geom_density_ridges() + 
+  scale_x_continuous(breaks = seq(1960, 2022, by = 10)) + 
+  labs(x = "year", y = "genre") + 
+  scale_point_color_hue(l = 40) +
+  scale_fill_cyclical(values = c("blue", "green"))
+
+```
+
+
+#Reccomendation System
+
+Reading the rating data
+
+```{r}
+##rating_data<- read.csv("/Users/abhibhagupta/Desktop/grad_coursework/sem2/DataMining/data/rating_complete.csv")
+head(rating_data)
+dim(rating_data)
+```
+Remove any missing values. 
+-> The dataset doesn't contain any missing values
+
+```{r}
+rating_data <- rating_data[complete.cases(rating_data), ] 
+dim(rating_data)
+```
+
+
+Reading the Anime data which contains information about all animes
+```{r}
+##anime_data<- read.csv("/Users/abhibhagupta/Desktop/grad_coursework/sem2/DataMining/data/anime.csv")
+head(anime_data)
+```
+
+We are using a subset of the anime data as it is too large to be used on a personal computer.
+```{r}
+rating_data = rating_data[1:10000,]
+dim(rating_data)
+```
+
+
+
+
+```{r}
+table(rating_data$user_id)
+```
+
+
+For our anime recommendation system, we use recommenderlabs to implement it. We have to convert our matrix into a sparse matrix.
+
+```{r}
+ratingMatrix <- dcast(rating_data, user_id ~ anime_id, value.var = "rating")
+dim(ratingMatrix)
+ratingMatrix <- as.matrix(ratingMatrix[,-1]) #remove user_ids
+ratingMatrix <- as(ratingMatrix, "realRatingMatrix")
+str(ratingMatrix)
+```
+
+Important parameters that provide us various options for building recommendation systems
+
+```{r}
+recommendation_model <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
+names(recommendation_model)
+```
+
+
+```{r}
+lapply(recommendation_model, "[[", "description")
+```
+
+Implement Item Based Collaborative Filtering.
+```{r}
+recommendation_model$UBCF_realRatingMatrix$parameters
+```
+
+Exploring Similar Data
+
+Utilizing preferences gathered from numerous other users, collaborative filtering involves recommending animes to consumers. For instance, if user A and user B both enjoy comedy anime, then A will be recommended the anime that B will watch in the future, and vice versa. Therefore, establishing a commonality between the two consumers is necessary for making anime recommendations. We can calculate similarities using a variety of operators, including cosine, pearson, and jaccard, with the aid of recommenderlab.
+
+
+
+```{r}
+similarity_mat <- similarity(ratingMatrix[1:4, ],
+                               method = "cosine",
+                               which = "users")
+as.matrix(similarity_mat)
+```
+
+```{r}
+image(as.matrix(similarity_mat), main = "User's Similarities")
+```
+
+
+In the above matrix, each row and column represents a user. We have taken four users and each cell in this matrix represents the similarity that is shared between the two users.
+
+
+
+Now, we delineate the similarity that is shared between anime
+
+```{r}
+anime_similarity <- similarity(ratingMatrix[, 1:4], method =
+                                 "cosine", which = "items")
+as.matrix(anime_similarity)
+image(as.matrix(anime_similarity), main = "Anime similarity")
+
+```
+
+
+Extract the most unique ratings
+
+```{r}
+rating_values <- as.vector(ratingMatrix@data)
+unique(rating_values)
+```
+
+
+Create a table of ratings that will display the most unique ratings.
+
+```{r}
+Table_of_Ratings <- table(rating_values) # creating a count of movie ratings
+Table_of_Ratings
+```
+
+
+```{r}
+head(anime_data)
+```
+
+Since there are  many columns that we do not need, we use a subset of them.
+
+```{r}
+anime_data <- anime_data[, c("MAL_ID", "Name", "Score", "Genres" )]
+```
+
+
+```{r}
+summary(anime_data)
+```
+
+```{r}
+head(anime_data)
+```
+
+Most Viewed Movies Visualization
+In this section, we will explore the most viewed animes in our dataset. We will first count the number of views in an anime and then organize them in a table that would group them in descending order.
+
+
+```{r}
+library(ggplot2)
+anime_views <- colCounts(ratingMatrix) # count views for each movie
+#print(anime_views)
+table_views <- data.frame(anime = names(anime_views),
+                      views = anime_views) # create dataframe of views
+#table_views
+table_views <- table_views[order(table_views$views,
+                                decreasing = TRUE), ] # sort by number of views
+table_views$title <- NA
+
+for (index in 1:dim(table_views)[1]){
+  table_views[index,3] <- as.character(subset(anime_data,
+                                         anime_data$MAL_ID == table_views[index,1])$Name)
+}
+table_views[1:6,]
+```
+
+
+```{r}
+ggplot(table_views[1:6, ], aes(x = title, y = views)) +
+  geom_bar(stat="identity", fill = 'steelblue') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+
+  ggtitle("Total Views of the Top Animes")
+```
+
+The figure above shows the number of views for the top 6 most watched anime. The anime Shingeki No Kyojin has the highest number of views. 
+
+
+Performing Data Preparation
+We will conduct data preparation in the following three steps –
+
+Selecting useful data.
+Normalizing data.
+Binarizing the data.
+For finding useful data in our dataset, we have set the threshold for the minimum number of users who have rated a film as 50. This is also same for minimum number of views that are per film. This way, we have filtered a list of watched films from least-watched ones.
+
+
+
+# values chosen based on what makes visualisation easier.
+
+```{r}
+anime_ratings <- ratingMatrix[rowCounts(ratingMatrix) > 5,
+                             colCounts(ratingMatrix) > 5]
+anime_ratings
+```
+
+
+
+```{r}
+
+minimum_movies<- quantile(rowCounts(anime_ratings), 0.98)
+minimum_users <- quantile(colCounts(anime_ratings), 0.98)
+image(anime_ratings[rowCounts(anime_ratings) > minimum_movies,
+                     colCounts(anime_ratings) > minimum_users],
+main = "Heatmap of the top users and movies")
+```
+
+
+```{r}
+average_ratings <- rowMeans(anime_ratings)
+qplot(average_ratings, fill=I("steelblue"), col=I("red")) +
+  ggtitle("Distribution of the average rating per user")
+
+```
+
+
+```{r}
+normalized_ratings <- normalize(anime_ratings)
+
+```
+
+
+```{r}
+image(normalized_ratings[rowCounts(normalized_ratings) > minimum_movies,
+                          colCounts(normalized_ratings) > minimum_users],
+main = "Normalized Ratings of the Top Users")
+
+```
+
+
+```{r}
+binary_minimum_animes <- quantile(rowCounts(anime_ratings), 0.95)
+binary_minimum_users <- quantile(colCounts(anime_ratings), 0.95)
+#movies_watched <- binarize(movie_ratings, minRating = 1)
+
+good_rated_animes <- binarize(anime_ratings, minRating = 3)
+image(good_rated_animes[rowCounts(anime_ratings) > binary_minimum_animes,
+colCounts(anime_ratings) > binary_minimum_users],
+main = "Heatmap of the top users and movies")
+
+
+```
+
+```{r}
+sampled_data<- sample(x = c(TRUE, FALSE),
+                      size = nrow(anime_ratings),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2))
+training_data <- anime_ratings[sampled_data, ]
+testing_data <- anime_ratings[!sampled_data, ]
+
+```
+
+#First approach: Without features.
+```{r}
+recommendation_system <- recommenderRegistry$get_entries(dataType ="realRatingMatrix")
+recommendation_system$UBCF_realRatingMatrix$parameters
+
+```
+
+```{r}
+library(caret)
+library(tidyr)
+```
+
+
+```{r}
+# anime_ratings <- as(rating_data, "realRatingMatrix")
+
+
+e <- evaluationScheme(anime_ratings, method = "split", train = 0.9, given = 1 , goodRating = 5, k = 10)
+
+getData(e, "train")
+getData(e, "unknown")
+getData(e, "known")
+
+
+recommenders <- list(
+RANDOM = list(name = "POPULAR", param = NULL),
+POPULAR = list(name = "RANDOM", param = NULL),
+RERECOMMEND = list(name = "RERECOMMEND", param = NULL))
+
+# for baseline uncomment this
+#weights <- c(0.0, 1.0, 0.0)
+
+#hybrid recommender model
+weights <- c(6.0, 1.0, 4.0)
+
+
+
+# create a user-based CF recommender using training data
+
+r <- Recommender(data = getData(e, "train"), method = "HYBRID", parameter = list(recommenders = recommenders, weights = weights))
+
+p <- predict(object = r, newdata = getData(e, "known") , type = "ratings")
+
+calcPredictionAccuracy(p, getData(e, "unknown"))
+head(calcPredictionAccuracy(p,getData(e, "unknown") , byUser = TRUE))
+
+p <- predict(r, getData(e, "known"), type = "topNList", n = 10)
+p
+```
+
+
+
+
+```{r}
+model_info <- getModel(r)
+
+class(model_info)
+model_info
+```
+
+
+Printing the recommendations for the first user.
+
+```{r}
+user1 <- p@items[[1]] # recommendation for the first user
+movies_user1 <- p@itemLabels[user1]
+movies_user2 <- movies_user1
+for (index in 1:10){
+  movies_user2[index] <- as.character(subset(anime_data,
+                                         anime_data$MAL_ID == movies_user1[index])$Name)
+}
+movies_user2
+```
+
+# Second approach: With features
+
+```{r}
+csv_Anime <- read.csv(file = "/Users/abhibhagupta/Desktop/anime.csv")
+anime_data <- csv_Anime
+
+head(rating_data)
+head(anime_data)
+```
+
+#change column name so that we can merge dataframes to incorporate the important features 'Score' and 'Rank'
+
+```{r}
+names(rating_data)[2] <- "MAL_ID"
+head(rating_data)
+```
+
+
+
+
+
+```{r}
+merged_df <- merge(rating_data, anime_data, by = "MAL_ID", all = TRUE)
+head(merged_df)
+```
+
+# keeping the important features.
+
+```{r}
+subset_df <- merged_df[, c("user_id", "MAL_ID", "rating", "Score", "Ranked")]
+head(subset_df)
+
+```
+
+# normalise the continuous variables.
+
+```{r}
+df_norm <- subset_df
+df_norm[c( "Score", "Ranked")] <- lapply(df_norm[, c(  "Score", "Ranked")], as.numeric)
+
+df_norm[ c( "Score", "Ranked")]  <- scale(df_norm[, c( "Score", "Ranked")], center = TRUE, scale = TRUE)
+
+```
+
+#uniform data type
+
+```{r}
+df_norm$MAL_ID <- as.double(unlist(df_norm$MAL_ID ))
+df_norm$user_id <- as.double(unlist(df_norm$user_id))
+df_norm$Score  <- as.double(unlist(df_norm$Score ))
+df_norm$Ranked <- as.double(unlist(df_norm$Ranked))
+df_norm$rating <- as.double(unlist(df_norm$rating))
+# remove Na values
+df_norm <- na.omit(df_norm)
+```
+
+#convert into sparse matrix
+```{r}
+mat <- as(df_norm, "realRatingMatrix")
+```
+
+
+```{r}
+
+
+e <- evaluationScheme(mat, method = "split", train = 0.9, given = 1 , goodRating = 5, k = 10)
+
+getData(e, "train")
+getData(e, "unknown")
+getData(e, "known")
+
+
+recommenders <- list(
+RANDOM = list(name = "POPULAR", param = NULL),
+POPULAR = list(name = "RANDOM", param = NULL),
+RERECOMMEND = list(name = "RERECOMMEND", param = NULL))
+
+# for baseline uncomment this
+#weights <- c(0.0, 1.0, 0.0)
+
+#hybrid recommender model
+weights <- c(6.0, 1.0, 4.0)
+
+
+
+# create a user-based CF recommender using training data
+
+r <- Recommender(data = getData(e, "train"), method = "HYBRID", parameter = list(recommenders = recommenders, weights = weights))
+
+p <- predict(object = r, newdata = getData(e, "known") , type = "ratings")
+
+calcPredictionAccuracy(p, getData(e, "unknown"))
+head(calcPredictionAccuracy(p,getData(e, "unknown") , byUser = TRUE))
+
+p <- predict(r, getData(e, "known"), type = "topNList", n = 10)
+p
+```
+
+```{r}
+user1 <- p@items[[1]] # recommendation for the first user
+movies_user1 <- p@itemLabels[user1]
+movies_user2 <- movies_user1
+for (index in 1:10){
+  movies_user2[index] <- as.character(subset(anime_data,
+                                         anime_data$MAL_ID == movies_user1[index])$Name)
+}
+movies_user2
+```
+
+#Topic modelling
+Now we will try to find the topics most watched by the user for which we predicted the anime
+
+```{r}
+library(dplyr)
+rec_anime <- as.data.frame(movies_user2)
+names(rec_anime)[1] <- "Name"
+```
+
+
+```{r}
+synopsis_data<- read.csv("/Users/abhibhagupta/Desktop/grad_coursework/sem2/DataMining/data/anime_with_synopsis.csv")
+head(synopsis_data)
+```
+
+```{r}
+left_join_df <- merge(rec_anime, synopsis_data, by = "Name", all.x = TRUE)
+head(left_join_df)
+```
+
+
+```{r}
+#install.packages("tidytext")
+```
+
+```{r}
+library(tidyverse) # general utility & workflow functions
+library(tidytext) # tidy implimentation of NLP methods
+library(topicmodels) # for LDA topic modelling 
+library(tm) # general text mining functions, making document term matrixes
+library(SnowballC) #
+library(stringi)
+
+```
+
+
+```{r}
+# function to get & plot the most informative terms by a specificed number
+# of topics, using LDA
+top_terms_by_topic_LDA <- function(input_text, # should be a columm from a dataframe
+                                   plot = T, # return a plot? TRUE by defult
+                                   number_of_topics = 4) # number of topics (4 by default)
+{    
+    # create a corpus (type of object expected by tm) and document term matrix
+    Corpus <- Corpus(VectorSource(input_text)) # make a corpus object
+    DTM <- DocumentTermMatrix(Corpus) # get the count of words/document
+
+    # remove any empty rows in our document term matrix (if there are any 
+    # we'll get an error when we try to run our LDA)
+    unique_indexes <- unique(DTM$i) # get the index of each unique value
+    DTM <- DTM[unique_indexes,] # get a subset of only those indexes
+    
+    # preform LDA & get the words/topic in a tidy text format
+    lda <- LDA(DTM, k = number_of_topics, control = list(seed = 1234))
+    topics <- tidy(lda, matrix = "beta")
+
+    # get the top ten terms for each topic
+    top_terms <- topics  %>% # take the topics data frame and..
+      group_by(topic) %>% # treat each topic as a different group
+      top_n(10, beta) %>% # get the top 10 most informative words
+      ungroup() %>% # ungroup
+      arrange(topic, -beta) # arrange words in descending informativeness
+ # if the user asks for a plot (TRUE by default)
+    if(plot == T){
+        # plot the top ten terms for each topic in order
+        top_terms %>% # take the top terms
+          mutate(term = reorder(term, beta)) %>% # sort terms by beta value 
+          ggplot(aes(term, beta, fill = factor(topic))) + # plot beta by theme
+          geom_col(show.legend = FALSE) + # as a bar plot
+          facet_wrap(~ topic, scales = "free") + # which each topic in a seperate plot
+          labs(x = NULL, y = "Beta") + # no x label, change y label 
+          coord_flip() # turn bars sideways
+    }else{ 
+        # if the user does not request a plot
+        # return a list of sorted terms instead
+        return(top_terms)
+    }
+}
+
+```
+
+```{r}
+# create a document term matrix to clean
+reviewsCorpus <- Corpus(VectorSource(left_join_df$sypnopsis)) 
+reviewsDTM <- DocumentTermMatrix(reviewsCorpus)
+
+# convert the document term matrix to a tidytext corpus
+reviewsDTM_tidy <- tidy(reviewsDTM)
+
+# I'm going to add my own custom stop words that I don't think will be
+# very informative in hotel reviews
+custom_stop_words <- tibble(word = c("hotel", "room"))
+
+# remove stopwords
+reviewsDTM_tidy_cleaned <- reviewsDTM_tidy %>% # take our tidy dtm and...
+    anti_join(stop_words, by = c("term" = "word")) %>% # remove English stopwords and...
+    anti_join(custom_stop_words, by = c("term" = "word")) # remove my custom stopwords
+
+# reconstruct cleaned documents (so that each word shows up the correct number of times)
+cleaned_documents <- reviewsDTM_tidy_cleaned %>%
+    group_by(document) %>% 
+    mutate(terms = toString(rep(term, count))) %>%
+    select(document, terms) %>%
+    unique()
+
+```
+
+
+```{r}
+library(topicmodels)
+
+top_terms_by_topic_LDA(cleaned_documents$terms, number_of_topics = 10)
+```
+
+```{r}
+#install.packages("wordcloud")
+library(wordcloud)
+#install.packages("RColorBrewer")
+library(RColorBrewer)
+#install.packages("wordcloud2")
+library(wordcloud2)
+```
+
+```{r}
+docs <- Corpus(VectorSource(left_join_df$sypnopsis))
+docs
+```
+
+
+
+```{r}
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+```
+
+```{r}
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+```
+
+```{r}
+library(tm)
+library(tmap)
+```
+
+
+```{r}
+#install.packages("tmaptools")
+#install.packages("leafem")
+```
+
+```{r}
+library(wordcloud)
+```
+
+# word cloud of most frequent topics watched by user 1
+
+```{r}
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 10, max.words=100, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"), scale=c(2, 0.01))
+```
+
+
+
+
+
